@@ -1,10 +1,13 @@
-
 import math
+from typing import Optional, Union
 import torch
 from torch import nn
+from torch._C import T
+from torch.types import Number
+
 
 class DropKwargs(nn.Module):
-    def __init__(self, inner):
+    def __init__(self, inner: nn.Module):
         super().__init__()
         self.inner = inner
 
@@ -13,7 +16,7 @@ class DropKwargs(nn.Module):
 
 
 class SequentialKwargs(nn.Module):
-    def __init__(self, *modules):
+    def __init__(self, *modules: nn.Module):
         super().__init__()
         self.inner = nn.ModuleList(modules)
 
@@ -24,7 +27,7 @@ class SequentialKwargs(nn.Module):
         return out
 
 
-def exists(val):
+def exists(val: Optional[T]) -> bool:
     return val is not None
 
 
@@ -32,7 +35,7 @@ def default(val, d):
     return val if exists(val) else d
 
 
-def cast_tuple(val, depth=1):
+def cast_tuple(val, depth: int = 1):
     return val if isinstance(val, tuple) else (val, ) * depth
 
 
@@ -54,10 +57,15 @@ class ClampWithGrad(torch.autograd.Function):
 clamp_with_grad = ClampWithGrad.apply
 
 
-def clamp_exp(t: torch.Tensor, low=math.log(1e-2), high=math.log(100)):
+def clamp_exp(
+        t: torch.Tensor,
+        low: float = math.log(1e-2),
+        high: float = math.log(100),
+):
     return clamp_with_grad(t, low, high).exp()
 
-def mk_full(d, init):
+
+def mk_full(d: int, init: Union[torch.Tensor, Number]):
     if isinstance(init, torch.Tensor):
         return init
     else:

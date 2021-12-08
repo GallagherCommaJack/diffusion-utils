@@ -5,8 +5,8 @@ import torch
 from torch import nn, einsum
 import torch.nn.functional as F
 
-from einops import rearrange
-from einops.layers.torch import Rearrange
+from einops import rearrange # type: ignore
+from einops.layers.torch import Rearrange # type: ignore
 
 from norm import *
 from pos_emb import *

@@ -1,19 +1,37 @@
+from typing import Callable, Optional, Union
+from typing_extensions import Protocol
+
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.types import Number
 
 from utils import mk_full, SequentialKwargs, exists
+
+param_type = Union[torch.Tensor, Number]
+
+
+class NormFnType(Protocol):
+    def __call__(
+        self,
+        dim: int,
+        groups: int = 1,
+        init_weight: param_type = 1,
+        init_bias: param_type = 0,
+        **kwargs,
+    ):
+        pass
 
 
 class ClassConditionalLayerNorm2d(nn.Module):
     def __init__(
         self,
-        dim,
-        n_classes,
-        groups=1,
-        cond_weight=1e-1,
-        init_weight=1,
-        init_bias=0,
+        n_classes: int,
+        dim: int,
+        groups: int = 1,
+        init_weight: param_type = 1,
+        init_bias: param_type = 0,
+        cond_weight: param_type = 1e-1,
         **kwargs,
     ):
         super().__init__()
@@ -35,12 +53,12 @@ class ClassConditionalLayerNorm2d(nn.Module):
 class ConditionalLayerNorm2d(nn.Module):
     def __init__(
         self,
-        dim,
-        d_cond,
-        groups=1,
-        cond_weight=1e-1,
-        init_weight=1,
-        init_bias=0,
+        d_cond: int,
+        dim: int,
+        groups: int = 1,
+        init_weight: param_type = 1,
+        init_bias: param_type = 0,
+        cond_weight: param_type = 1e-1,
         **kwargs,
     ):
         super().__init__()
@@ -62,10 +80,10 @@ class ConditionalLayerNorm2d(nn.Module):
 class LayerNorm(nn.Module):
     def __init__(
         self,
-        dim,
-        groups=1,
-        init_weight=1,
-        init_bias=0,
+        dim: int,
+        groups: int = 1,
+        init_weight: param_type = 1,
+        init_bias: param_type = 0,
         **kwargs,
     ):
         super().__init__()
@@ -77,15 +95,27 @@ class LayerNorm(nn.Module):
         return F.group_norm(x, self.groups, self.weight, self.bias)
 
 
-def pre_norm(dim, fn, wrapper=None, norm_fn=LayerNorm):
+def pre_norm(
+    dim,
+    fn: nn.Module,
+    wrapper: Optional[Callable[[nn.Module], nn.Module]] = None,
+    norm_fn: NormFnType = LayerNorm,
+) -> nn.Module:
     norm = norm_fn(dim)
     out = SequentialKwargs(norm, fn)
     if exists(wrapper):
-        out = wrapper(fn, offload_to_cpu=True)
+        out = wrapper(out) # type: ignore # mypy thinks wrapper isn't callable and out is not a module!
     return out
 
 
-def norm_scales_and_shifts(norm_fn, dim, **kwargs):
+def norm_scales_and_shifts(
+    norm_fn: NormFnType,
+    dim: int,
+    **kwargs,
+) -> nn.Module:
+    assert 'groups' not in kwargs
+    assert 'dim' not in kwargs
+    assert 'init_bias' not in kwargs
     return norm_fn(
         dim * 2,
         groups=2,
