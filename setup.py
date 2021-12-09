@@ -12,6 +12,9 @@ setup(
     install_requires=[
         'einops>=0.3',
         'torch>=1.10',
+        'pytorch-lightning>=1.5',
+        'kornia>=0.6',
+        'wandb>=0.12',
     ],
     classifiers=[
         'Development Status :: 1 - Planning',
