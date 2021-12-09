@@ -68,16 +68,18 @@ class ConvFFT(nn.Module):
         self.in_norm = norm_fn(dim)
         self.map_in = conv(dim, hidden_dim)
         self.pos_emb = FourierPosEmb(pos_features)
-        self.fft_map = conv(hidden_dim + pos_features, hidden_dim)
+        self.fft_map = conv(hidden_dim * 2 + pos_features, hidden_dim * 2)
         self.map_out = conv(hidden_dim, dim)
         self.out_norm = norm_fn(dim, init_weight=1e-3)
 
     def forward(self, x, **kwargs):
         y = self.map_in(self.in_norm(x))
         yf = torch.fft.rfft2(y, norm='ortho')
-        pe = self.pos_emb(yf)
-        yf = self.fft_map(torch.cat(yf, pe), dim=1)
-        y = self.map_out(torch.fft.irfft2(yf, norm='ortho'))
+        pe = self.pos_emb(yf.real)
+        yf = torch.cat([yf.real, yf.imag, pe], dim=1)
+        yf = self.fft_map(yf)
+        yr, yi = yf.chunk(2, dim=1)
+        y = self.map_out(torch.fft.irfft2(torch.complex(yr, yi), norm='ortho'))
         return x + self.out_norm(y, **kwargs)
 
 
