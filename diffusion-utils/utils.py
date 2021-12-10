@@ -73,12 +73,12 @@ class PopBack(nn.Module):
 
 
 class ApplyMods(nn.Module):
-    def __init__(self, mods):
+    def __init__(self, *mods):
         super().__init__()
-        self.inner = nn.ModuleDict(mods)
+        self.inner = nn.ModuleList(mods)
 
     def forward(self, tup: TensorSeq) -> TensorSeq:
-        for i, mod in self.inner.items():
+        for i, mod in enumerate(self.inner):
             tup[i] = mod(tup[i])
         return tup
 

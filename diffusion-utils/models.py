@@ -1,4 +1,3 @@
-from typing import Sequence
 from torch import nn, Tensor
 
 from utils import *
@@ -146,8 +145,9 @@ class SequentialBlock(nn.Module):
         super().__init__()
         self.block = Block(*args, **kwargs)
 
-    def forward(self, tup: Sequence[Tensor]):
-        return self.block.forward(*tup)
+    def forward(self, tup: MutableSequence[Tensor]):
+        tup[0] = self.block.forward(*tup)
+        return tup
 
 
 class SequentialDownBlock(nn.Module):
@@ -160,24 +160,24 @@ class SequentialDownBlock(nn.Module):
         **kwargs,
     ):
         super().__init__()
-        self.block = PushBack(SequentialBlock(c_in, *args, **kwargs))
+        self.block = PushBack(Block(c_in, *args, **kwargs))
         self.to_down = nn.Sequential(
             nn.Conv2d(c_in, c_out // factor**2, 3, padding=1),
             nn.PixelUnshuffle(factor),
         )
 
     def forward(self, tup: MutableSequence[Tensor]):
-        tup = self.block.forward(tup)
+        tup = self.block(tup)
         tup[0] = self.to_down(tup[0])
         return tup
 
 
-class SkipUpsampler(nn.Module):
+class SkipConv(nn.Module):
     def __init__(self, ch: int):
         super().__init__()
         self.inner = nn.Conv2d(ch * 2, ch, 3, padding=1)
 
-    def forward(self, x, *args, skip):
+    def forward(self, x, skip):
         stacked = torch.cat([x, skip], dim=1)
         return self.inner(stacked)
 
@@ -196,13 +196,14 @@ class SequentialUpBlock(nn.Module):
             nn.Conv2d(c_in, c_out * factor**2, 3, padding=1),
             nn.PixelShuffle(factor),
         )
-        self.block = SequentialBlock(c_out, *args, **kwargs)
-        self.skip = PopBack(SkipUpsampler(c_out), key='skip')
+        self.block = Block(c_out, *args, **kwargs)
+        self.skip = SkipConv(c_out)
 
     def forward(self, tup: MutableSequence[Tensor]):
-        tup = self.block(*tup)
         tup[0] = self.to_up(tup[0])
-        tup = self.skip(tup)
+        skip = tup.pop()
+        tup[0] = self.skip(tup[0], skip)
+        tup[0] = self.block(*tup, skip=skip)
         return tup
 
 
@@ -304,6 +305,7 @@ def unet(
 
         ups.append(
             SequentialUpBlock(
+                d_out,
                 d_in,
                 depth=num_blocks,
                 dim_head=dim_head,
@@ -351,13 +353,13 @@ def unet(
             mid = [mid1, mid2]
 
     return nn.Sequential(
-        ApplyMods({
-            0: project_in,
-            1: to_time_emb,
-        }),
+        ApplyMods(
+            project_in,
+            to_time_emb,
+        ),
         *downs,
         *mid,
-        *ups,
+        *reversed(ups),
         RetIndex(0),
         project_out,
     )
