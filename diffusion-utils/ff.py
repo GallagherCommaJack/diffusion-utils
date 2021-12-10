@@ -123,6 +123,35 @@ class FeedForward(nn.Module):
         return y + x
 
 
+class Downsampler(nn.Module):
+    def __init__(self,
+                 c_in: int,
+                 c_out: int,
+                 factor: int = 2,
+                 norm_fn: NormFnType = LayerNorm):
+        super().__init__()
+        self.to_out = nn.Sequential(
+            nn.Conv2d(c_in, c_out // factor**2, 3, padding=1),
+            nn.PixelUnshuffle(factor),
+        )
+        self.norm = norm_fn(c_in)
+
+    def forward(
+        self,
+        x: Tensor,
+        time: Optional[Tensor] = None,
+        cond: Optional[Tensor] = None,
+        global_cond: Optional[Tensor] = None,
+        classes: Optional[Tensor] = None,
+        *args,
+        skip: Optional[Tensor] = None,
+        **kwargs,
+    ) -> Tensor:
+        x = self.norm(x, time=time, global_cond=global_cond, classes=classes)
+        x = self.to_out(x)
+        return x
+
+
 def downsampler(
     c_in: int,
     c_out: int,

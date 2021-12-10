@@ -14,7 +14,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 from utils import *
 
 import wandb
-from tqdm import trange
+from tqdm import trange # type: ignore
 
 # TODO: sampling loop as separate method
 # TODO: alternate sampling schedules

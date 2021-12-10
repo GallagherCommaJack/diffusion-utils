@@ -2,9 +2,11 @@ import math
 from typing import MutableSequence, Optional, TypeVar, Union
 import torch
 from torch import nn
+from torch import Tensor
 from torch.types import Number
 
 T = TypeVar('T')
+
 
 def exists(val: Optional[T]) -> bool:
     return val is not None
@@ -39,12 +41,18 @@ class SequentialKwargs(nn.Module):
         return out
 
 
+TensorSeq = MutableSequence[Tensor]
+
+
 class PushBack(nn.Module):
     def __init__(self, inner: nn.Module):
         super().__init__()
         self.inner = inner
 
-    def forward(self, xtup: MutableSequence[torch.Tensor]):
+    def forward(
+        self,
+        xtup: TensorSeq,
+    ) -> TensorSeq:
         x = self.inner(*xtup)
         xtup.append(x)
         xtup[0] = x
@@ -57,11 +65,42 @@ class PopBack(nn.Module):
         self.inner = inner
         self.key = key
 
-    def forward(self, xtup: MutableSequence[torch.Tensor]):
+    def forward(self, xtup: TensorSeq) -> TensorSeq:
         kwargs = {self.key: xtup.pop()}
         x = self.inner(*xtup, **kwargs)
         xtup[0] = x
         return xtup
+
+
+class ApplyMods(nn.Module):
+    def __init__(self, mods):
+        super().__init__()
+        self.inner = nn.ModuleDict(mods)
+
+    def forward(self, tup: TensorSeq) -> TensorSeq:
+        for i, mod in self.inner.items():
+            tup[i] = mod(tup[i])
+        return tup
+
+
+class ApplyMod(nn.Module):
+    def __init__(self, inner: nn.Module, ix: int = 0):
+        super().__init__()
+        self.inner = inner
+        self.ix = ix
+
+    def forward(self, tup: TensorSeq) -> TensorSeq:
+        tup[self.ix] = self.inner(tup[self.ix])
+        return tup
+
+
+class RetIndex(nn.Module):
+    def __init__(self, ix: int = 0):
+        super().__init__()
+        self.ix = ix
+
+    def forward(self, tup: TensorSeq) -> Tensor:
+        return tup[self.ix]
 
 
 class ClampWithGrad(torch.autograd.Function):

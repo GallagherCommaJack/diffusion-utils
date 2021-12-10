@@ -45,8 +45,8 @@ class ClassConditionalLayerNorm2d(nn.Module):
                 ]))
         self.groups = groups
 
-    def forward(self, x, cond_class, **kwargs):
-        scales, shifts = self.emb(cond_class)[:, :, None, None].chunk(2, dim=1)
+    def forward(self, x, classes, **kwargs):
+        scales, shifts = self.emb(classes)[:, :, None, None].chunk(2, dim=1)
         return shifts.addcmul(F.group_norm(x, self.groups), scales)
 
 
@@ -72,8 +72,9 @@ class ConditionalLayerNorm2d(nn.Module):
                     mk_full(dim, init_bias),
                 ]))
 
-    def forward(self, x, cond_emb, **kwargs):
-        scales, shifts = self.proj(cond_emb)[:, :, None, None].chunk(2, dim=1)
+    def forward(self, x, global_cond, **kwargs):
+        scales, shifts = self.proj(global_cond)[:, :, None, None].chunk(2,
+                                                                        dim=1)
         return torch.addcmul(shifts, F.group_norm(x, self.groups), scales)
 
 
@@ -104,7 +105,9 @@ def pre_norm(
     norm = norm_fn(dim)
     out = SequentialKwargs(norm, fn)
     if exists(wrapper):
-        out = wrapper(out) # type: ignore # mypy thinks wrapper isn't callable and out is not a module!
+        out = wrapper(
+            out
+        )  # type: ignore # mypy thinks wrapper isn't callable and out is not a module!
     return out
 
 
