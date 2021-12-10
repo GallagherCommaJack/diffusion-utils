@@ -2,7 +2,7 @@ from abc import abstractmethod
 from copy import deepcopy
 from itertools import chain
 
-import kornia.augmentations as K
+import kornia.augmentation as K
 
 import torch
 from torch import optim
