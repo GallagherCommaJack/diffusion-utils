@@ -107,7 +107,7 @@ class FourierPosEmb(nn.Module):
         w: Optional[int] = None,
     ) -> Tensor:
         if x is not None:
-            _, _, h, w = x.shape
+            b, _, h, w = x.shape
             dtype, device = x.dtype, x.device
         else:
             if h is None and w is not None:
@@ -130,4 +130,5 @@ class FourierPosEmb(nn.Module):
         )
         f = self.map(grid)
         f = torch.cat([f.cos(), f.sin()], dim=1)
+        f = f.broadcast_to(b, -1, h, w)
         return f

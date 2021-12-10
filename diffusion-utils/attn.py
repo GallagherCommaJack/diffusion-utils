@@ -5,8 +5,8 @@ import torch
 from torch import nn, einsum
 import torch.nn.functional as F
 
-from einops import rearrange # type: ignore
-from einops.layers.torch import Rearrange # type: ignore
+from einops import rearrange  # type: ignore
+from einops.layers.torch import Rearrange  # type: ignore
 
 from norm import *
 from pos_emb import *
@@ -130,7 +130,7 @@ class ChannelAttention(nn.Module):
         self.attn = ScaledCosineAttention(heads, dim_head)
         self.proj_in = nn.Sequential(
             nn.Conv2d(dim, inner_dim * 3, 3, padding=1),
-            Rearrange('b c x y -> b (x y) c', h=heads),
+            Rearrange('b c x y -> b (x y) c'),
         )
         self.proj_out = SequentialKwargs(
             DropKwargs(
@@ -147,7 +147,7 @@ class ChannelAttention(nn.Module):
         y = x
         if exists(time_emb):
             y = y + rearrange(time_emb, 'b c -> b c () ()')
-        q, k, v = self.proj_in(y).chunk(3, dim=-2)
+        q, k, v = self.proj_in(y).chunk(3, dim=-1)
         attn = rearrange(self.attn(q, k, v), 'b (h w) c -> b c h w', h=h, w=w)
         scales, shifts = self.proj_out(attn, **kwargs).chunk(2, dim=1)
         return shifts.addcmul(x, scales)

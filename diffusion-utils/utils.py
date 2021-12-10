@@ -1,9 +1,21 @@
 import math
-from typing import Optional, Union
+from typing import MutableSequence, Optional, TypeVar, Union
 import torch
 from torch import nn
-from torch._C import T
 from torch.types import Number
+
+T = TypeVar('T')
+
+def exists(val: Optional[T]) -> bool:
+    return val is not None
+
+
+def default(val, d):
+    return val if exists(val) else d
+
+
+def cast_tuple(val, depth: int = 1):
+    return val if isinstance(val, tuple) else (val, ) * depth
 
 
 class DropKwargs(nn.Module):
@@ -27,16 +39,29 @@ class SequentialKwargs(nn.Module):
         return out
 
 
-def exists(val: Optional[T]) -> bool:
-    return val is not None
+class PushBack(nn.Module):
+    def __init__(self, inner: nn.Module):
+        super().__init__()
+        self.inner = inner
+
+    def forward(self, xtup: MutableSequence[torch.Tensor]):
+        x = self.inner(*xtup)
+        xtup.append(x)
+        xtup[0] = x
+        return xtup
 
 
-def default(val, d):
-    return val if exists(val) else d
+class PopBack(nn.Module):
+    def __init__(self, inner: nn.Module, key: str):
+        super().__init__()
+        self.inner = inner
+        self.key = key
 
-
-def cast_tuple(val, depth: int = 1):
-    return val if isinstance(val, tuple) else (val, ) * depth
+    def forward(self, xtup: MutableSequence[torch.Tensor]):
+        kwargs = {self.key: xtup.pop()}
+        x = self.inner(*xtup, **kwargs)
+        xtup[0] = x
+        return xtup
 
 
 class ClampWithGrad(torch.autograd.Function):

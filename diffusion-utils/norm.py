@@ -8,7 +8,7 @@ from torch.types import Number
 
 from utils import mk_full, SequentialKwargs, exists
 
-param_type = Union[torch.Tensor, Number]
+param_type = Union[torch.Tensor, float]
 
 
 class NormFnType(Protocol):
@@ -16,8 +16,8 @@ class NormFnType(Protocol):
         self,
         dim: int,
         groups: int = 1,
-        init_weight: param_type = 1,
-        init_bias: param_type = 0,
+        init_weight: param_type = 1.0,
+        init_bias: param_type = 0.0,
         **kwargs,
     ):
         pass
@@ -29,8 +29,8 @@ class ClassConditionalLayerNorm2d(nn.Module):
         n_classes: int,
         dim: int,
         groups: int = 1,
-        init_weight: param_type = 1,
-        init_bias: param_type = 0,
+        init_weight: param_type = 1.0,
+        init_bias: param_type = 0.0,
         cond_weight: param_type = 1e-1,
         **kwargs,
     ):
@@ -56,8 +56,8 @@ class ConditionalLayerNorm2d(nn.Module):
         d_cond: int,
         dim: int,
         groups: int = 1,
-        init_weight: param_type = 1,
-        init_bias: param_type = 0,
+        init_weight: param_type = 1.0,
+        init_bias: param_type = 0.0,
         cond_weight: param_type = 1e-1,
         **kwargs,
     ):
@@ -82,8 +82,8 @@ class LayerNorm(nn.Module):
         self,
         dim: int,
         groups: int = 1,
-        init_weight: param_type = 1,
-        init_bias: param_type = 0,
+        init_weight: param_type = 1.0,
+        init_bias: param_type = 0.0,
         **kwargs,
     ):
         super().__init__()
