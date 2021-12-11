@@ -9,16 +9,17 @@ from norm import *
 from pos_emb import *
 
 activation_type = Callable[[], nn.Module]
+default_activation: activation_type = partial(nn.LeakyReLU, inplace=True)
 
 
 class DepthwiseSeparableConv2d(nn.Sequential):
     def __init__(
-            self,
-            c_in: int,
-            c_out: int,
-            k: int = 3,
-            bias: bool = True,
-            act: activation_type = partial(nn.LeakyReLU, inplace=True),
+        self,
+        c_in: int,
+        c_out: int,
+        k: int = 3,
+        bias: bool = True,
+        act: activation_type = default_activation,
     ):
         super().__init__(
             nn.Conv2d(c_in, c_out, 1, bias=False),
@@ -35,12 +36,12 @@ class DepthwiseSeparableConv2d(nn.Sequential):
 
 
 def conv_layer(
-        c_in: int,
-        c_out: int,
-        k: int = 3,
-        bias: bool = True,
-        use_depthwise: bool = False,
-        depthwise_act: activation_type = partial(nn.LeakyReLU, inplace=True),
+    c_in: int,
+    c_out: int,
+    k: int = 3,
+    bias: bool = True,
+    use_depthwise: bool = False,
+    depthwise_act: activation_type = default_activation,
 ):
     if use_depthwise:
         return DepthwiseSeparableConv2d(c_in, c_out, k, bias, depthwise_act)
@@ -50,20 +51,20 @@ def conv_layer(
 
 class ConvFFT(nn.Module):
     def __init__(
-            self,
-            dim: int,
-            mult: int = 4,
-            use_depthwise: bool = True,
-            pos_features: int = 16,
-            norm_fn: NormFnType = LayerNorm,
-            act: activation_type = partial(nn.LeakyReLU, inplace=True),
+        self,
+        dim: int,
+        mult: int = 4,
+        use_depthwise: bool = True,
+        pos_features: int = 16,
+        norm_fn: NormFnType = LayerNorm,
+        depthwise_act: activation_type = default_activation,
     ):
         super().__init__()
         hidden_dim = int(dim * mult)
         conv = partial(
             conv_layer,
             use_depthwise=use_depthwise,
-            depthwise_act=act,
+            depthwise_act=depthwise_act,
         )
         self.in_norm = norm_fn(dim)
         self.map_in = conv(dim, hidden_dim)
@@ -79,12 +80,12 @@ class ConvFFT(nn.Module):
     def forward(self, x, **kwargs):
         y = self.map_in(self.in_norm(x))
         yf = torch.fft.rfft2(y, norm='ortho')
-        yr, yi = yf.real, yf.imag
-        pe = self.pos_emb(yr)
-        yf = torch.cat([yr, yi, pe], dim=1)
-        yf = self.fft_map(yf)
-        yr, yi = yf.chunk(2, dim=1)
-        y = self.map_out(torch.fft.irfft2(torch.complex(yr, yi), norm='ortho'))
+        ym, ya = yf.abs(), yf.angle()
+        pe = self.pos_emb(ym)
+        yf = self.fft_map(torch.cat([ym, ya, pe], dim=1))
+        yf = torch.polar(*yf.chunk(2, dim=1))
+        y = torch.fft.irfft2(yf, norm='ortho')
+        y = self.map_out(y)
         return x + self.out_norm(y, **kwargs)
 
 
@@ -94,15 +95,19 @@ class FeedForward(nn.Module):
         dim: int,
         mult: int = 4,
         norm_fn: NormFnType = LayerNorm,
-        act: activation_type = partial(nn.LeakyReLU, inplace=True),
+        depthwise_act: activation_type = default_activation,
+        act: activation_type = None,
         use_depthwise: bool = True,
     ):
         super().__init__()
         hidden_dim = int(dim * mult)
+        if act is None:
+            act = depthwise_act
+
         conv = partial(
             conv_layer,
             use_depthwise=use_depthwise,
-            depthwise_act=act,
+            depthwise_act=depthwise_act,
         )
 
         self.map_in = conv(dim, hidden_dim)
@@ -121,35 +126,6 @@ class FeedForward(nn.Module):
         y = self.map_out(y)
         y = self.out_norm(y, **kwargs)
         return y + x
-
-
-class Downsampler(nn.Module):
-    def __init__(self,
-                 c_in: int,
-                 c_out: int,
-                 factor: int = 2,
-                 norm_fn: NormFnType = LayerNorm):
-        super().__init__()
-        self.to_out = nn.Sequential(
-            nn.Conv2d(c_in, c_out // factor**2, 3, padding=1),
-            nn.PixelUnshuffle(factor),
-        )
-        self.norm = norm_fn(c_in)
-
-    def forward(
-        self,
-        x: Tensor,
-        time: Optional[Tensor] = None,
-        cond: Optional[Tensor] = None,
-        global_cond: Optional[Tensor] = None,
-        classes: Optional[Tensor] = None,
-        *args,
-        skip: Optional[Tensor] = None,
-        **kwargs,
-    ) -> Tensor:
-        x = self.norm(x, time=time, global_cond=global_cond, classes=classes)
-        x = self.to_out(x)
-        return x
 
 
 def downsampler(

@@ -174,3 +174,18 @@ def calculate_stats(e):
     e_skewness = (e - e_mean).pow(3).mean() / e_variance_stable**1.5
     e_kurtosis = (e - e_mean).pow(4).mean() / e_variance_stable**2
     return e_mean, e_variance, e_skewness, e_kurtosis
+
+
+def measure_perf(f):
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    start_event.record()
+
+    f()
+    # Run some things here
+
+    end_event.record()
+    torch.cuda.synchronize()  # Wait for the events to be recorded!
+    elapsed_time_ms = start_event.elapsed_time(end_event)
+
+    return elapsed_time_ms

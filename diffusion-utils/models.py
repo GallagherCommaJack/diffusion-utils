@@ -19,6 +19,10 @@ class Block(nn.Module):
         rotary_emb: bool = True,
         cross_attn: bool = False,
         use_channel_attn: bool = True,
+        conv_fft: bool = False,
+        use_depthwise: bool = False,
+        ff_act: activation_type = None,
+        depthwise_act: activation_type = default_activation,
         d_cond: int = 512,
         skip: bool = False,
         norm_fn: NormFnType = LayerNorm,
@@ -65,14 +69,29 @@ class Block(nn.Module):
                 )
             return pre_norm(dim, attn, norm_fn=norm_fn)
 
+        def mk_ff():
+            if conv_fft:
+                ff = ConvFFT(
+                    dim,
+                    mult=ff_mult,
+                    norm_fn=norm_fn,
+                    depthwise_act=depthwise_act,
+                    use_depthwise=use_depthwise,
+                )
+            else:
+                ff = FeedForward(
+                    dim,
+                    mult=ff_mult,
+                    norm_fn=norm_fn,
+                    depthwise_act=depthwise_act,
+                    act=ff_act,
+                    use_depthwise=use_depthwise,
+                )
+            return pre_norm(dim, ff, norm_fn=norm_fn)
+
         for _ in range(depth):
             self.attns.append(mk_attn())
-            self.ffs.append(
-                pre_norm(
-                    dim,
-                    FeedForward(dim, mult=ff_mult, norm_fn=norm_fn),
-                    norm_fn=norm_fn,
-                ))
+            self.ffs.append(mk_ff())
             if self.cross is not None:
                 self.cross.append(
                     pre_norm(
