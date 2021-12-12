@@ -130,7 +130,7 @@ class ChannelAttention(nn.Module):
         self.attn = ScaledCosineAttention(heads, dim_head)
         self.proj_in = nn.Sequential(
             nn.Conv2d(dim, inner_dim * 3, 3, padding=1),
-            Rearrange('b c x y -> b (x y) c'),
+            Rearrange('b c x y -> b c (x y)'),
         )
         self.proj_out = SequentialKwargs(
             DropKwargs(
@@ -147,8 +147,8 @@ class ChannelAttention(nn.Module):
         y = x
         if exists(time_emb):
             y = y + rearrange(time_emb, 'b c -> b c () ()')
-        q, k, v = self.proj_in(y).chunk(3, dim=-1)
-        attn = rearrange(self.attn(q, k, v), 'b (h w) c -> b c h w', h=h, w=w)
+        q, k, v = self.proj_in(y).chunk(3, dim=1)
+        attn = rearrange(self.attn(q, k, v), 'b c (h w) -> b c h w', h=h, w=w)
         scales, shifts = self.proj_out(attn, **kwargs).chunk(2, dim=1)
         return shifts.addcmul(x, scales)
 

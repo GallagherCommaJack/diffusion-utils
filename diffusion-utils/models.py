@@ -1,3 +1,4 @@
+from typing import Sequence
 from torch import nn, Tensor
 
 from utils import *
@@ -159,27 +160,37 @@ class Block(nn.Module):
         return x
 
 
+BlockTemplate = Callable[[int, int], Block]
+
+
+def mk_template(kwargs):
+    def block_template(ch: int, depth: int):
+        return Block(ch, depth, **kwargs)
+
+    return block_template
+
+
 class SequentialBlock(nn.Module):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, ch: int, depth: int, template: BlockTemplate):
         super().__init__()
-        self.block = Block(*args, **kwargs)
+        self.inner = template(ch, depth)
 
     def forward(self, tup: MutableSequence[Tensor]):
-        tup[0] = self.block.forward(*tup)
+        tup[0] = self.inner.forward(*tup)
         return tup
 
 
-class SequentialDownBlock(nn.Module):
+class DownBlock(nn.Module):
     def __init__(
         self,
         c_in: int,
         c_out: int,
+        depth: int = 2,
         factor: int = 2,
-        *args,
-        **kwargs,
+        inner: BlockTemplate = Block,
     ):
         super().__init__()
-        self.block = PushBack(Block(c_in, *args, **kwargs))
+        self.block = PushBack(inner(c_in, depth))
         self.to_down = nn.Sequential(
             nn.Conv2d(c_in, c_out // factor**2, 3, padding=1),
             nn.PixelUnshuffle(factor),
@@ -201,21 +212,21 @@ class SkipConv(nn.Module):
         return self.inner(stacked)
 
 
-class SequentialUpBlock(nn.Module):
+class UpBlock(nn.Module):
     def __init__(
         self,
         c_in: int,
         c_out: int,
+        depth: int = 2,
         factor: int = 2,
-        *args,
-        **kwargs,
+        inner: BlockTemplate = Block,
     ):
         super().__init__()
         self.to_up = nn.Sequential(
             nn.Conv2d(c_in, c_out * factor**2, 3, padding=1),
             nn.PixelShuffle(factor),
         )
-        self.block = Block(c_out, *args, **kwargs)
+        self.block = inner(c_out, depth)
         self.skip = SkipConv(c_out)
 
     def forward(self, tup: MutableSequence[Tensor]):
@@ -227,22 +238,29 @@ class SequentialUpBlock(nn.Module):
 
 
 def unet(
-    dim=64,
-    channels=3,
-    stages=4,
-    num_blocks=2,
-    dim_head=64,
-    heads=8,
-    ff_mult=4,
-    time_emb=False,
-    input_channels=None,
-    output_channels=None,
-    cross_attn=False,
-    input_res=128,
-    d_cond=512,
-    mults=None,
-    num_classes=None,
-    global_cond=False,
+    dim: int,
+    channels: int = 3,
+    stages: int = 4,
+    num_blocks: int = 2,
+    dim_head: int = 64,
+    heads: int = 8,
+    ff_mult: int = 4,
+    time_emb: bool = False,
+    time_emb_dim: Optional[int] = None,
+    cross_attn: bool = False,
+    rotary_emb: bool = True,
+    conv_fft: bool = False,
+    use_depthwise: bool = False,
+    ff_act: activation_type = None,
+    depthwise_act: activation_type = default_activation,
+    input_channels: Optional[int] = None,
+    output_channels: Optional[int] = None,
+    d_cond: int = 512,
+    norm_fn: NormFnType = LayerNorm,
+    input_res: int = 128,
+    mults: Sequence[int] = None,
+    num_classes: Optional[int] = None,
+    global_cond: bool = False,
 ):
     if global_cond:
         assert num_classes is None
@@ -306,70 +324,57 @@ def unet(
     ):
 
         is_last = ind == (stages - 1)
+        kwargs = {
+            'dim_head': dim_head,
+            'heads': heads,
+            'ff_mult': ff_mult,
+            'time_emb_dim': time_emb_dim,
+            'cross_attn': cross_attn,
+            'use_channel_attn': use_channel_attn,
+            'd_cond': d_cond,
+            'norm_fn': norm_fn,
+            'rotary_emb': rotary_emb,
+            'conv_fft': conv_fft,
+            'use_depthwise': use_depthwise,
+            'ff_act': ff_act,
+            'depthwise_act': depthwise_act,
+        }
+
+        block_template = mk_template(kwargs)
 
         downs.append(
-            SequentialDownBlock(
+            DownBlock(
                 d_in,
                 d_out,
                 depth=num_blocks,
-                dim_head=dim_head,
-                heads=heads,
-                ff_mult=ff_mult,
-                time_emb_dim=time_emb_dim,
-                cross_attn=cross_attn,
-                use_channel_attn=use_channel_attn,
-                d_cond=d_cond,
-                norm_fn=norm_fn,
+                inner=block_template,
             ))
 
         ups.append(
-            SequentialUpBlock(
+            UpBlock(
                 d_out,
                 d_in,
                 depth=num_blocks,
-                dim_head=dim_head,
-                heads=heads,
-                ff_mult=ff_mult,
-                time_emb_dim=time_emb_dim,
-                cross_attn=cross_attn,
-                use_channel_attn=use_channel_attn,
-                d_cond=d_cond,
-                skip=True,
-                norm_fn=norm_fn,
+                inner=block_template,
             ))
 
         if dim_head * heads < d_out:
             if heads < dim_head:
                 heads = d_out // dim_head
+                kwargs['heads'] = heads
             else:
                 dim_head = d_out // heads
+                kwargs['dim_head'] = dim_head
+            block_template = mk_template(kwargs)
 
         if is_last:
-            mid1 = SequentialBlock(
-                dim=d_out,
-                depth=num_blocks,
-                dim_head=dim_head,
-                heads=heads,
-                ff_mult=ff_mult,
-                time_emb_dim=time_emb_dim,
-                cross_attn=cross_attn,
-                use_channel_attn=use_channel_attn,
-                d_cond=d_cond,
-                norm_fn=norm_fn,
-            )
-            mid2 = SequentialBlock(
-                dim=d_out,
-                depth=num_blocks,
-                dim_head=dim_head,
-                heads=heads,
-                ff_mult=ff_mult,
-                time_emb_dim=time_emb_dim,
-                cross_attn=cross_attn,
-                use_channel_attn=use_channel_attn,
-                d_cond=d_cond,
-                norm_fn=norm_fn,
-            )
-            mid = [mid1, mid2]
+            mid = [
+                SequentialBlock(
+                    ch=d_out,
+                    depth=num_blocks,
+                    template=block_template,
+                ) for _ in range(2)
+            ]
 
     return nn.Sequential(
         ApplyMods(
