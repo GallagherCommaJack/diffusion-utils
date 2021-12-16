@@ -8,10 +8,10 @@ import torch.nn.functional as F
 from einops import rearrange  # type: ignore
 from einops.layers.torch import Rearrange  # type: ignore
 
-from norm import *
-from pos_emb import *
-from utils import *
-from ff import *
+from diffusion_utils.norm import *
+from diffusion_utils.pos_emb import *
+from diffusion_utils.utils import *
+from diffusion_utils.ff import *
 
 
 class ScaledCosineAttention(nn.Module):

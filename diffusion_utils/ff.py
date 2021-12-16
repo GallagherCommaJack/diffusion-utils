@@ -4,9 +4,9 @@ from typing_extensions import Protocol
 
 from torch import nn
 
-from utils import *
-from norm import *
-from pos_emb import *
+from diffusion_utils.utils import *
+from diffusion_utils.norm import *
+from diffusion_utils.pos_emb import *
 
 activation_type = Callable[[], nn.Module]
 default_activation: activation_type = partial(nn.LeakyReLU, inplace=True)

@@ -7,9 +7,6 @@ from torch import nn, Tensor
 
 from einops import rearrange, repeat  # type: ignore
 
-from utils import exists
-
-
 def apply_rotary_emb(q: Tensor, k: Tensor,
                      pos_emb: Tensor) -> Tuple[Tensor, Tensor]:
     sin, cos = pos_emb

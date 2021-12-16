@@ -1,11 +1,11 @@
 from typing import Sequence
 from torch import nn, Tensor
 
-from utils import *
-from attn import *
-from ff import *
-from norm import *
-from pos_emb import *
+from diffusion_utils.utils import *
+from diffusion_utils.attn import *
+from diffusion_utils.ff import *
+from diffusion_utils.norm import *
+from diffusion_utils.pos_emb import *
 
 
 class Block(nn.Module):

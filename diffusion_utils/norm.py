@@ -6,7 +6,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.types import Number
 
-from utils import mk_full, SequentialKwargs, exists
+from diffusion_utils.utils import mk_full, SequentialKwargs, exists
 
 param_type = Union[torch.Tensor, float]
 

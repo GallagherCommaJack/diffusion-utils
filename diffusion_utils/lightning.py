@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from pytorch_lightning.utilities.distributed import rank_zero_only
 
-from utils import *
+from diffusion_utils.utils import *
 
 import wandb
 from tqdm import trange # type: ignore
