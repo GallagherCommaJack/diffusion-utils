@@ -309,6 +309,7 @@ def unet(
 
     downs = []
     ups = []
+    mid = []
 
     heads, dim_head, num_blocks = map(partial(cast_tuple, depth=stages),
                                       (heads, dim_head, num_blocks))
@@ -368,13 +369,13 @@ def unet(
             block_template = mk_template(kwargs)
 
         if is_last:
-            mid = [
-                SequentialBlock(
-                    ch=d_out,
-                    depth=num_blocks,
-                    template=block_template,
-                ) for _ in range(2)
-            ]
+            for _ in range(2):
+                mid.append(
+                    SequentialBlock(
+                        ch=d_out,
+                        depth=num_blocks,
+                        template=block_template,
+                    ))
 
     return nn.Sequential(
         ApplyMods(
