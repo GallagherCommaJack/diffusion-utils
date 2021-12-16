@@ -1,14 +1,14 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
-    name='diffusion-utils',
+    name='diffusion_utils',
     version='0.1.0',
     description='various useful layers for doing diffusion on image data',
     url='https://github.com/GallagherCommaJack/diffusion-utils',
     author='Jack Gallagher',
     author_email='jack@gallabytes.com',
     license='MIT',
-    packages=['diffusion-utils'],
+    packages=find_packages(),
     install_requires=[
         'einops>=0.3',
         'torch>=1.10',
