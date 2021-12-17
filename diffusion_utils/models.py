@@ -105,7 +105,8 @@ class Block(nn.Module):
                             norm_fn=norm_fn,
                         ),
                         norm_fn=norm_fn,
-                    ))
+                    )
+                )
 
     def forward(
         self,
@@ -118,17 +119,19 @@ class Block(nn.Module):
         skip: Optional[Tensor] = None,
     ):
         kwargs = {
-            'cond': cond,
-            'time': time,
-            'global_cond': global_cond,
-            'classes': classes,
-            'skip': skip,
+            "cond": cond,
+            "time": time,
+            "global_cond": global_cond,
+            "classes": classes,
+            "skip": skip,
         }
 
         attn_time_emb = None
         ff_time_emb = None
         if time is not None:
-            assert self.attn_time_emb is not None and self.ff_time_emb is not None, 'time_emb_dim must be given on init if you are conditioning based on time'
+            assert (
+                self.attn_time_emb is not None and self.ff_time_emb is not None
+            ), "time_emb_dim must be given on init if you are conditioning based on time"
             attn_time_emb = self.attn_time_emb(time)
             ff_time_emb = self.ff_time_emb(time)
 
@@ -146,7 +149,7 @@ class Block(nn.Module):
                 )
                 x = ff(x, time_emb=ff_time_emb, **kwargs)
                 x, cond = cross(x, time_emb=attn_time_emb, **kwargs)
-                kwargs['cond'] = cond
+                kwargs["cond"] = cond
         else:
             for attn, ff in zip(self.attns, self.ffs):
                 x = attn(
@@ -192,7 +195,7 @@ class DownBlock(nn.Module):
         super().__init__()
         self.block = PushBack(inner(c_in, depth))
         self.to_down = nn.Sequential(
-            nn.Conv2d(c_in, c_out // factor**2, 3, padding=1),
+            nn.Conv2d(c_in, c_out // factor ** 2, 3, padding=1),
             nn.PixelUnshuffle(factor),
         )
 
@@ -223,7 +226,7 @@ class UpBlock(nn.Module):
     ):
         super().__init__()
         self.to_up = nn.Sequential(
-            nn.Conv2d(c_in, c_out * factor**2, 3, padding=1),
+            nn.Conv2d(c_in, c_out * factor ** 2, 3, padding=1),
             nn.PixelShuffle(factor),
         )
         self.block = inner(c_out, depth)
@@ -271,7 +274,7 @@ def unet(
         norm_fn = LayerNorm
 
     if mults is None:
-        mults = [2**(i + 1) for i in range(stages)]
+        mults = [2 ** (i + 1) for i in range(stages)]
     elif len(mults) < stages:
         mults = mults + [mults[-1] for _ in range(stages - len(mults))]
     elif len(mults) > stages:
@@ -280,16 +283,19 @@ def unet(
     ins = [dim * m for m in mults[:-1]]
     outs = [dim * m for m in mults[1:]]
 
-    resolutions = [input_res // 2**i for i in range(stages)]
-    use_channel_attn = [
-        res**2 > (dim * m) for m, res in zip(mults, resolutions)
-    ]
+    resolutions = [input_res // 2 ** i for i in range(stages)]
+    use_channel_attn = [res ** 2 > (dim * m) for m, res in zip(mults, resolutions)]
 
     input_channels = default(input_channels, channels)
     output_channels = default(output_channels, channels)
 
     to_time_emb = None
     time_emb_dim = None
+
+    project_in = nn.Sequential(
+        nn.Conv2d(input_channels, dim, 3, padding=1),
+        nn.LeakyReLU(inplace=True),
+    )
 
     if time_emb:
         time_emb_dim = dim
@@ -299,11 +305,9 @@ def unet(
             nn.GELU(),
             nn.Linear(dim * 4, dim),
         )
-
-    project_in = nn.Sequential(
-        nn.Conv2d(input_channels, dim, 3, padding=1),
-        nn.LeakyReLU(inplace=True),
-    )
+        emb_in = ApplyMods(project_in, to_time_emb)
+    else:
+        emb_in = ApplyMod(project_in, ix=0)
 
     project_out = nn.Conv2d(dim, output_channels, 3, padding=1)
 
@@ -311,28 +315,27 @@ def unet(
     ups = []
     mid = []
 
-
     for ind, use_channel_attn, d_in, d_out in zip(
-            range(stages),
-            use_channel_attn,
-            ins,
-            outs,
+        range(stages),
+        use_channel_attn,
+        ins,
+        outs,
     ):
         is_last = ind == (stages - 1)
         kwargs = {
-            'dim_head': dim_head,
-            'heads': heads,
-            'ff_mult': ff_mult,
-            'time_emb_dim': time_emb_dim,
-            'cross_attn': cross_attn,
-            'use_channel_attn': use_channel_attn,
-            'd_cond': d_cond,
-            'norm_fn': norm_fn,
-            'rotary_emb': rotary_emb,
-            'conv_fft': conv_fft,
-            'use_depthwise': use_depthwise,
-            'ff_act': ff_act,
-            'depthwise_act': depthwise_act,
+            "dim_head": dim_head,
+            "heads": heads,
+            "ff_mult": ff_mult,
+            "time_emb_dim": time_emb_dim,
+            "cross_attn": cross_attn,
+            "use_channel_attn": use_channel_attn,
+            "d_cond": d_cond,
+            "norm_fn": norm_fn,
+            "rotary_emb": rotary_emb,
+            "conv_fft": conv_fft,
+            "use_depthwise": use_depthwise,
+            "ff_act": ff_act,
+            "depthwise_act": depthwise_act,
         }
 
         block_template = mk_template(kwargs)
@@ -343,7 +346,8 @@ def unet(
                 d_out,
                 depth=num_blocks,
                 inner=block_template,
-            ))
+            )
+        )
 
         ups.append(
             UpBlock(
@@ -351,15 +355,16 @@ def unet(
                 d_in,
                 depth=num_blocks,
                 inner=block_template,
-            ))
+            )
+        )
 
         if dim_head * heads < d_out:
             if heads < dim_head:
                 heads = d_out // dim_head
-                kwargs['heads'] = heads
+                kwargs["heads"] = heads
             else:
                 dim_head = d_out // heads
-                kwargs['dim_head'] = dim_head
+                kwargs["dim_head"] = dim_head
             block_template = mk_template(kwargs)
 
         if is_last:
@@ -369,13 +374,11 @@ def unet(
                         ch=d_out,
                         depth=num_blocks,
                         template=block_template,
-                    ))
+                    )
+                )
 
     return nn.Sequential(
-        ApplyMods(
-            project_in,
-            to_time_emb,
-        ),
+        emb_in,
         *downs,
         *mid,
         *reversed(ups),
