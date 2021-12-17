@@ -276,7 +276,7 @@ def unet(
         mults = mults + [mults[-1] for _ in range(stages - len(mults))]
     elif len(mults) > stages:
         mults = mults[:stages]
-    mults = [1] + mults
+    mults = [1] + list(mults)
     ins = [dim * m for m in mults[:-1]]
     outs = [dim * m for m in mults[1:]]
 
@@ -311,19 +311,13 @@ def unet(
     ups = []
     mid = []
 
-    heads, dim_head, num_blocks = map(partial(cast_tuple, depth=stages),
-                                      (heads, dim_head, num_blocks))
 
-    for ind, heads, dim_head, num_blocks, use_channel_attn, d_in, d_out in zip(
+    for ind, use_channel_attn, d_in, d_out in zip(
             range(stages),
-            heads,
-            dim_head,
-            num_blocks,
             use_channel_attn,
             ins,
             outs,
     ):
-
         is_last = ind == (stages - 1)
         kwargs = {
             'dim_head': dim_head,
