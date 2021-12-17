@@ -267,9 +267,9 @@ def unet(
 ):
     if global_cond:
         assert num_classes is None
-        norm_fn = partial(ConditionalLayerNorm2d, d_cond=d_cond)
+        norm_fn = partial(ConditionalLayerNorm2d, d_cond)
     elif num_classes:
-        norm_fn = partial(ClassConditionalLayerNorm2d, n_classes=num_classes)
+        norm_fn = partial(ClassConditionalLayerNorm2d, num_classes)
     else:
         norm_fn = LayerNorm
 
