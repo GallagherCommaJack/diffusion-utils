@@ -43,9 +43,9 @@ class BaseDiffusion(pl.LightningModule):
 
     def forward(self, x, time, **kwargs):
         if self.training:
-            return self.model(x, time=time, **kwargs)
+            return self.model(x, time, **kwargs)
         else:
-            return self.model_ema(x, time=time, **kwargs)
+            return self.model_ema(x, time, **kwargs)
 
     @torch.no_grad()
     def sample(self, z, n, steps, eta, show_progress=True, **kwargs):
@@ -158,7 +158,7 @@ class BaseDiffusion(pl.LightningModule):
             log_dict.update({f"distillation_{k}": v for k, v in d_logs})
             loss = loss + d_loss * self.distill_weight
         else:
-            v = self.forward(noised_reals, time=t, **kwargs)
+            v = self.forward(noised_reals, t, **kwargs)
         e = v.sub(targets).pow(2)
         l, logs = self.prepare_stats(e)
         loss = loss + l

@@ -390,3 +390,68 @@ def unet(
         RetIndex(0),
         project_out,
     )
+
+
+class UNet(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        channels: int = 3,
+        stages: int = 4,
+        num_blocks: int = 2,
+        dim_head: int = 64,
+        heads: int = 8,
+        ff_mult: int = 4,
+        time_emb: bool = False,
+        time_emb_dim: Optional[int] = None,
+        cross_attn: bool = False,
+        rotary_emb: bool = True,
+        conv_fft: bool = False,
+        use_depthwise: bool = False,
+        ff_act: activation_type = None,
+        depthwise_act: activation_type = default_activation,
+        input_channels: Optional[int] = None,
+        output_channels: Optional[int] = None,
+        d_cond: int = 512,
+        norm_fn: NormFnType = LayerNorm,
+        input_res: int = 128,
+        mults: Sequence[int] = None,
+        num_classes: Optional[int] = None,
+        global_cond: bool = False,
+    ):
+        super().__init__()
+        self.inner = unet(
+            dim=dim,
+            channels=channels,
+            stages=stages,
+            num_blocks=num_blocks,
+            dim_head=dim_head,
+            heads=heads,
+            ff_mult=ff_mult,
+            time_emb=time_emb,
+            time_emb_dim=time_emb_dim,
+            cross_attn=cross_attn,
+            rotary_emb=rotary_emb,
+            conv_fft=conv_fft,
+            use_depthwise=use_depthwise,
+            ff_act=ff_act,
+            depthwise_act=depthwise_act,
+            input_channels=input_channels,
+            output_channels=output_channels,
+            d_cond=d_cond,
+            norm_fn=norm_fn,
+            input_res=input_res,
+            mults=mults,
+            num_classes=num_classes,
+            global_cond=global_cond,
+        )
+
+    def forward(
+        self,
+        x: Tensor,
+        time: Optional[Tensor] = None,
+        cond: Optional[Tensor] = None,
+        global_cond: Optional[Tensor] = None,
+        classes: Optional[Tensor] = None,
+    ):
+        return self.inner((x, time, cond, global_cond, classes))
