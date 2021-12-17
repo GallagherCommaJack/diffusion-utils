@@ -168,19 +168,19 @@ class BaseDiffusion(pl.LightningModule):
 
 
 class UnconditionalDiffusion(BaseDiffusion):
-    def eval_batch(self, batch, batch_idx, do_gather=False):
+    def eval_batch(self, batch, do_gather=False):
         reals = batch[0]
         return self.eval_reals(reals, do_gather)
 
 
 class ClassConditionalDiffusion(BaseDiffusion):
-    def eval_batch(self, batch, batch_idx, do_gather=False):
+    def eval_batch(self, batch, do_gather=False):
         reals, classes = batch[:2]
         return self.eval_reals(reals, classes=classes, do_gather=do_gather)
 
 
 class VectorConditionalDiffusion(BaseDiffusion):
-    def eval_batch(self, batch, batch_idx, do_gather=False):
+    def eval_batch(self, batch, do_gather=False):
         reals, cond = batch[:2]
         return self.eval_reals(reals, cond=cond)
 
@@ -196,7 +196,7 @@ class PatchSRDiffusion(BaseDiffusion):
         resampled = F.interpolate(down, scale_factor=self.factor)
         return resampled
 
-    def eval_batch(self, batch, batch_idx, do_gather=False):
+    def eval_batch(self, batch, do_gather=False):
         reals = batch[0]
         reals = self.mk_crop(reals)
         resampled_reals = self.resample(reals)
