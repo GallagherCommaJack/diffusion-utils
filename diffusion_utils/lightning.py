@@ -14,7 +14,7 @@ from pytorch_lightning.utilities.distributed import rank_zero_only
 from diffusion_utils.utils import *
 
 import wandb
-from tqdm import trange # type: ignore
+from tqdm import tqdm, trange  # type: ignore
 
 # TODO: sampling loop as separate method
 # TODO: alternate sampling schedules
@@ -28,6 +28,7 @@ class BaseDiffusion(pl.LightningModule):
         ema_decay=0.999,
         lr=1e-4,
         do_gather=True,
+        distill_weight=None,
     ):
         super().__init__()
         self.model = net
@@ -38,6 +39,7 @@ class BaseDiffusion(pl.LightningModule):
         self.rng = torch.quasirandom.SobolEngine(1, scramble=True)
         self.lr = lr
         self.do_gather = do_gather
+        self.distill_weight = distill_weight
 
     def forward(self, x, time, **kwargs):
         if self.training:
@@ -46,40 +48,47 @@ class BaseDiffusion(pl.LightningModule):
             return self.model_ema(x, time=time, **kwargs)
 
     @torch.no_grad()
-    def sample(self, x, n, steps, eta, show_progress=True, **kwargs):
+    def sample(self, z, n, steps, eta, show_progress=True, **kwargs):
         """Draws samples from a model given starting noise."""
-        range_fn = trange if show_progress else range
         ts = torch.ones([n], device=self.device)
 
         # Create the noise schedule
         t = torch.linspace(1, 0, steps + 1, device=self.device)[:-1]
         alphas, sigmas = get_alphas_sigmas(t)
+        ts = ts * t
 
         # The sampling loop
-        for i in range_fn(steps):
+        inner_iter = ts
+        if show_progress:
+            inner_iter = tqdm(inner_iter)
+        iter = enumerate(inner_iter)
+        for i, t in iter:
             # Get the model output (eps, the predicted noise)
-            v = self.forward(x, ts * t[i], **kwargs).float()
+            v = self.forward(z, t, **kwargs).float()
 
             # Predict the noise and the denoised image
-            pred = x * alphas[i] - v * sigmas[i]
-            eps = x * sigmas[i] + v * alphas[i]
+            pred = z * alphas[i] - v * sigmas[i]
+            eps = z * sigmas[i] + v * alphas[i]
 
             # If we are not on the last timestep, compute the noisy image for the
             # next timestep.
             if i < steps - 1:
                 # If eta > 0, adjust the scaling factor for the predicted noise
                 # downward according to the amount of additional noise to add
-                ddim_sigma = eta * (sigmas[i + 1]**2 / sigmas[i]**2).sqrt() * \
-                    (1 - alphas[i]**2 / alphas[i + 1]**2).sqrt()
-                adjusted_sigma = (sigmas[i + 1]**2 - ddim_sigma**2).sqrt()
+                ddim_sigma = (
+                    eta
+                    * (sigmas[i + 1] ** 2 / sigmas[i] ** 2).sqrt()
+                    * (1 - alphas[i] ** 2 / alphas[i + 1] ** 2).sqrt()
+                )
+                adjusted_sigma = (sigmas[i + 1] ** 2 - ddim_sigma ** 2).sqrt()
 
                 # Recombine the predicted noise and predicted denoised image in the
                 # correct proportions for the next step
-                x = pred * alphas[i + 1] + eps * adjusted_sigma
+                z = pred * alphas[i + 1] + eps * adjusted_sigma
 
                 # Add the correct amount of fresh noise
                 if eta:
-                    x += torch.randn_like(x) * ddim_sigma
+                    z += torch.randn_like(z) * ddim_sigma
                 True
 
         # If we are on the last timestep, output the denoised image
@@ -87,15 +96,17 @@ class BaseDiffusion(pl.LightningModule):
 
     def default_step(self, prefix, batch, batch_idx):
         loss, log_dict = self.eval_batch(batch, do_gather=self.do_gather)
-        log_dict = {f'{prefix}/{k}': v for k, v in log_dict.items()}
+        log_dict = {f"{prefix}/{k}": v for k, v in log_dict.items()}
         self.log_dict(log_dict, prog_bar=True, on_step=True)
         return loss
 
     def training_step(self, batch, batch_idx):
-        return self.default_step('train', batch, batch_idx)
+        return self.default_step("train", batch, batch_idx)
 
     def on_before_zero_grad(self, *args, **kwargs):
-        decay = 0.95 if self.trainer.global_step < self.ema_init_steps else self.ema_decay
+        decay = (
+            0.95 if self.trainer.global_step < self.ema_init_steps else self.ema_decay
+        )
         ema_update(self.model, self.model_ema, decay)
 
     def configure_optimizers(self):
@@ -118,8 +129,7 @@ class BaseDiffusion(pl.LightningModule):
         targets = noise * alphas - reals * sigmas
         return t, noised_reals, targets
 
-    def prepare_stats(self, v, targets, do_gather=False):
-        e = v.sub(targets).pow(2).mean(dim=(1, 2, 3))
+    def prepare_stats(self, e, do_gather=False):
         l = e.mean()
         e = e.detach()
 
@@ -129,7 +139,7 @@ class BaseDiffusion(pl.LightningModule):
         log_dict = {
             k: v
             for k, v in zip(
-                ['loss', 'variance', 'skewness', 'kurtosis'],
+                ["loss", "variance", "skewness", "kurtosis"],
                 calculate_stats(e),
             )
         }
@@ -139,12 +149,22 @@ class BaseDiffusion(pl.LightningModule):
     def eval_reals(self, reals, do_gather=False, **kwargs):
         t, noised_reals, targets = self.noise_reals(reals)
 
-        # Compute the model output and the loss. The model outputs the predicted
-        # Gaussian noise. It is conditioned on the noise level parameterized
-        # as log SNR.
-        v = self.forward(noised_reals, time=t, **kwargs)
-
-        return self.prepare_stats(v, targets, do_gather)
+        log_dict = {}
+        loss = 0.0
+        if self.distill_weight:
+            t_out = torch.zeros_like(t)
+            v, d_e = calc_v_with_distillation_errors(self, noised_reals, t, t_out)
+            d_loss, d_logs = self.prepare_stats(d_e, do_gather=do_gather)
+            log_dict.update({f"distillation_{k}": v for k, v in d_logs})
+            loss = loss + d_loss * self.distill_weight
+        else:
+            v = self.forward(noised_reals, time=t, **kwargs)
+        e = v.sub(targets).pow(2)
+        l, logs = self.prepare_stats(e)
+        loss = loss + l
+        log_dict.update({f"diffusion_{k}": v for k, v in logs})
+        log_dict["total"] = loss.item()
+        return loss, log_dict
 
 
 class UnconditionalDiffusion(BaseDiffusion):
@@ -213,9 +233,12 @@ class PatchSRDiffusion(BaseDiffusion):
             if i < steps - 1:
                 # If eta > 0, adjust the scaling factor for the predicted noise
                 # downward according to the amount of additional noise to add
-                ddim_sigma = eta * (sigmas[i + 1]**2 / sigmas[i]**2).sqrt() * \
-                    (1 - alphas[i]**2 / alphas[i + 1]**2).sqrt()
-                adjusted_sigma = (sigmas[i + 1]**2 - ddim_sigma**2).sqrt()
+                ddim_sigma = (
+                    eta
+                    * (sigmas[i + 1] ** 2 / sigmas[i] ** 2).sqrt()
+                    * (1 - alphas[i] ** 2 / alphas[i + 1] ** 2).sqrt()
+                )
+                adjusted_sigma = (sigmas[i + 1] ** 2 - ddim_sigma ** 2).sqrt()
 
                 # Recombine the predicted noise and predicted denoised image in the
                 # correct proportions for the next step
@@ -237,9 +260,9 @@ class WandbDemoCallback(pl.Callback):
             grid = module.demo()
 
         if isinstance(grid, list):
-            log_dict = {f'demo grid {k}': wandb.Image(v) for k, v in grid}
+            log_dict = {f"demo grid {k}": wandb.Image(v) for k, v in grid}
         else:
-            log_dict = {'demo grid': wandb.Image(grid)}
+            log_dict = {"demo grid": wandb.Image(grid)}
 
-        log_dict['global_step'] = trainer.global_step
+        log_dict["global_step"] = trainer.global_step
         trainer.logger.experiment.log(log_dict)

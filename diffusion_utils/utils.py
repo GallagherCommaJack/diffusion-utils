@@ -5,19 +5,19 @@ from torch import nn
 from torch import Tensor
 from torch.types import Number
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def exists(val: Optional[T]) -> bool:
     return val is not None
 
 
-def default(val, d):
-    return val if exists(val) else d
+def default(val: Optional[T], d: T) -> T:
+    return d if val is None else val
 
 
 def cast_tuple(val, depth: int = 1):
-    return val if isinstance(val, tuple) else (val, ) * depth
+    return val if isinstance(val, tuple) else (val,) * depth
 
 
 class DropKwargs(nn.Module):
@@ -113,18 +113,21 @@ class ClampWithGrad(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_in):
-        input, = ctx.saved_tensors
-        return grad_in * (grad_in * (input - input.clamp(ctx.min, ctx.max)) >=
-                          0), None, None
+        (input,) = ctx.saved_tensors
+        return (
+            grad_in * (grad_in * (input - input.clamp(ctx.min, ctx.max)) >= 0),
+            None,
+            None,
+        )
 
 
 clamp_with_grad = ClampWithGrad.apply
 
 
 def clamp_exp(
-        t: torch.Tensor,
-        low: float = math.log(1e-2),
-        high: float = math.log(100),
+    t: torch.Tensor,
+    low: float = math.log(1e-2),
+    high: float = math.log(100),
 ):
     return clamp_with_grad(t, low, high).exp()
 
@@ -157,7 +160,7 @@ def ema_update(model, averaged_model, decay):
 
 def get_ddpm_schedule(t):
     """Returns log SNRs for the noise schedule from the DDPM paper."""
-    return -torch.expm1(1e-4 + 10 * t**2).log()
+    return -torch.expm1(1e-4 + 10 * t ** 2).log()
 
 
 def get_alphas_sigmas(log_snrs):
@@ -171,8 +174,8 @@ def calculate_stats(e):
     e_mean = e.mean()
     e_variance = (e - e_mean).pow(2).mean()
     e_variance_stable = max(e_variance, 1e-5)
-    e_skewness = (e - e_mean).pow(3).mean() / e_variance_stable**1.5
-    e_kurtosis = (e - e_mean).pow(4).mean() / e_variance_stable**2
+    e_skewness = (e - e_mean).pow(3).mean() / e_variance_stable ** 1.5
+    e_kurtosis = (e - e_mean).pow(4).mean() / e_variance_stable ** 2
     return e_mean, e_variance, e_skewness, e_kurtosis
 
 
@@ -189,3 +192,26 @@ def measure_perf(f):
     elapsed_time_ms = start_event.elapsed_time(end_event)
 
     return elapsed_time_ms
+
+
+def calc_delta(t_in, t_out):
+    return math.pi / 2 * (t_in - t_out)
+
+
+def diffusion_step(z, v, t_in, t_out):
+    delta = calc_delta(t_in, t_out)
+    z = torch.cos(delta) * z - torch.sin(delta) * v
+    return z
+
+
+def calc_v_with_distillation_errors(net, z, t_in, t_out, *args, **kwargs):
+    v = net(z, t_in, *args, **kwargs)
+    with torch.no_grad():
+        delta = calc_delta(t_in, t_out)
+        t_mid = (t_in + t_out) / 2
+        z_1 = diffusion_step(z, v, t_in, t_mid)
+        v_2 = net(z_1, t_mid, *args, **kwargs)
+        z_2 = diffusion_step(z_1 < v_2, t_mid, t_out)
+        targets = z / torch.tan(delta) - z_2 / torch.sin(delta)
+    e = v.sub(targets).pow(2).mean(dim=[1, 2, 3])
+    return v, e

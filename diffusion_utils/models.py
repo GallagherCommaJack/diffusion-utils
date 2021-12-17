@@ -275,11 +275,15 @@ def unet(
 
     if mults is None:
         mults = [2 ** (i + 1) for i in range(stages)]
-    elif len(mults) < stages:
+    else:
+        mults = list(mults)
+
+    if len(mults) < stages:
         mults = mults + [mults[-1] for _ in range(stages - len(mults))]
     elif len(mults) > stages:
         mults = mults[:stages]
-    mults = [1] + list(mults)
+
+    mults = [1] + mults
     ins = [dim * m for m in mults[:-1]]
     outs = [dim * m for m in mults[1:]]
 
@@ -297,6 +301,7 @@ def unet(
         nn.LeakyReLU(inplace=True),
     )
 
+    emb_in: nn.Module
     if time_emb:
         time_emb_dim = dim
         to_time_emb = nn.Sequential(
