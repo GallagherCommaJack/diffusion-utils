@@ -288,7 +288,7 @@ def unet(
     outs = [dim * m for m in mults[1:]]
 
     resolutions = [input_res // 2 ** i for i in range(stages)]
-    use_channel_attn = [res ** 2 > (dim * m) for m, res in zip(mults, resolutions)]
+    use_channel_attn = [res ** 2 > d for res, d in zip(resolutions, outs)]
 
     input_channels = default(input_channels, channels)
     output_channels = default(output_channels, channels)
@@ -354,6 +354,9 @@ def unet(
             )
         )
 
+        kwargs["skip"] = True
+        block_template = mk_template(kwargs)
+
         ups.append(
             UpBlock(
                 d_out,
@@ -363,6 +366,7 @@ def unet(
             )
         )
 
+        kwargs["skip"] = False
         if dim_head * heads < d_out:
             if heads < dim_head:
                 heads = d_out // dim_head
@@ -370,7 +374,7 @@ def unet(
             else:
                 dim_head = d_out // heads
                 kwargs["dim_head"] = dim_head
-            block_template = mk_template(kwargs)
+        block_template = mk_template(kwargs)
 
         if is_last:
             for _ in range(2):

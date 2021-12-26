@@ -155,14 +155,14 @@ class BaseDiffusion(pl.LightningModule):
             t_out = torch.zeros_like(t)
             v, d_e = calc_v_with_distillation_errors(self, noised_reals, t, t_out)
             d_loss, d_logs = self.prepare_stats(d_e, do_gather=do_gather)
-            log_dict.update({f"distillation_{k}": v for k, v in d_logs})
+            log_dict.update({f"distillation_{k}": v for k, v in d_logs.items()})
             loss = loss + d_loss * self.distill_weight
         else:
             v = self.forward(noised_reals, t, **kwargs)
         e = v.sub(targets).pow(2)
         l, logs = self.prepare_stats(e)
         loss = loss + l
-        log_dict.update({f"diffusion_{k}": v for k, v in logs})
+        log_dict.update({f"diffusion_{k}": v for k, v in logs.items()})
         log_dict["total"] = loss.item()
         return loss, log_dict
 
