@@ -215,3 +215,12 @@ def calc_v_with_distillation_errors(net, z, t_in, t_out, *args, **kwargs):
         targets = z / torch.tan(delta) - z_2 / torch.sin(delta)
     e = v.sub(targets).pow(2).mean(dim=[1, 2, 3])
     return v, e
+
+def factor_int(n):
+    val = math.ceil(math.sqrt(n))
+    val2 = int(n/val)
+    while val2 * val != float(n):
+        val -= 1
+        val2 = int(n/val)
+    return val, val2
+
