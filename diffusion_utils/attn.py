@@ -98,8 +98,9 @@ class CrossAttn2d(nn.Module):
         d_cross = d_cross if d_cross else d_cond
         n_head, d_head = factor_int(d_out)
         assert d_cond % n_head == 0
-        # only a ScaleShift instead of an nn.LayerNorm bc we should prenormalize
-        self.affine_enc = ScaleShift(d_cross)
+        # only a scale instead of an nn.LayerNorm bc we should prenormalize
+        # only a scale instead of a ScaleShift bc we then project it
+        self.affine_scales = nn.Parameter(torch.ones([1, d_cross]))
         self.q_proj = nn.Sequential(
             nn.Conv2d(dim, d_out, 1),
             Rearrange("b c h w -> b (h w) c", n_h=n_head),
@@ -111,7 +112,7 @@ class CrossAttn2d(nn.Module):
     def forward(self, x, global_cond, cond, cond_mask, **kwargs):
         n, c, h, w = x.shape
         q = self.q_proj(x)
-        k, v = self.kv_proj(self.affine_enc(cond)).chunk(2, dim=1)
+        k, v = self.kv_proj(self.affine_scales * cond).chunk(2, dim=1)
         attn = self.attn(q, k, v, mask=cond_mask[:, None, None, :])
         attn = rearrange(attn, "b (h w) c -> b c h w", h=h, w=w)
         return self.out_proj(attn)
