@@ -5,12 +5,29 @@ from typing_extensions import Protocol
 from torch import nn
 from einops import reduce
 
-from diffusion_utils.utils import *
+from diffusion_utils.utils import compute_channel_change_mat, partial
 from diffusion_utils.norm import *
 from diffusion_utils.pos_emb import *
 
 activation_type = Callable[[], nn.Module]
 default_activation: activation_type = partial(nn.LeakyReLU, inplace=True)
+
+
+def sn_layer(*args, **kwargs):
+    conv = nn.Conv2d(*args, **kwargs)
+    nn.init.kaiming_normal_(conv.weight, nonlinearity="linear")
+    if exists(conv.bias):
+        nn.init.constant_(conv.bias, 0.0)
+    return conv
+
+
+def sn_block(dim: int, depth: int = 2, k: int = 3):
+    return nn.Sequential(
+        *[
+            nn.Sequential(sn_layer(dim, dim, k, padding="same"), nn.SELU())
+            for _ in range(depth)
+        ]
+    )
 
 
 class DepthwiseSeparableConv2d(nn.Sequential):
@@ -36,83 +53,6 @@ class DepthwiseSeparableConv2d(nn.Sequential):
         )
 
 
-class DepthwiseRematConvFn(torch.autograd.Function):
-    @staticmethod
-    def forward(
-        ctx,
-        input,
-        k1,
-        k2,
-        bias=None,
-        stride=1,
-        padding=0,
-        dilation=1,
-        groups=1,
-    ):
-        ctx.stride = stride
-        ctx.padding = padding
-        ctx.dilation = dilation
-        ctx.groups = groups
-        ctx.save_for_backward(input, k1, k2)
-        with torch.no_grad():
-            weight = torch.einsum("oi,hw->oihw", k1, k2)
-            output = F.conv2d(
-                input,
-                weight,
-                bias,
-                stride=stride,
-                padding=padding,
-                dilation=dilation,
-                groups=groups,
-            )
-        return output
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        input, k1, k2 = ctx.saved_tensors
-        stride, padding, dilation, groups = (
-            ctx.stride,
-            ctx.padding,
-            ctx.dilation,
-            ctx.groups,
-        )
-        grad_input = grad_k1 = grad_k2 = grad_bias = None
-        with torch.enable_grad():
-            weight = torch.einsum("oi,hw->oihw", k1, k2)
-        if ctx.needs_input_grad[0]:
-            grad_input = F.grad.conv2d_input(
-                input.shape,
-                weight,
-                grad_output,
-                stride=stride,
-                padding=padding,
-                dilation=dilation,
-                groups=groups,
-            )
-        if ctx.needs_input_grad[1] or ctx.needs_input_grad[2]:
-            grad_weight = F.grad.conv2d_weight(
-                input,
-                weight.shape,
-                grad_output,
-                stride=stride,
-                padding=padding,
-                dilation=dilation,
-                groups=groups,
-            )
-            if ctx.needs_input_grad[1] and ctx.needs_input_grad[2]:
-                grad_k1, grad_k2 = torch.autograd.grad(weight, (k1, k2), grad_weight)
-            elif ctx.needs_input_grad[1]:
-                grad_k1 = torch.autograd.grad(weight, k1, grad_weight)
-            elif ctx.needs_input_grad[2]:
-                grad_k2 = torch.autograd.grad(weight, k2, grad_weight)
-        if ctx.needs_input_grad[3]:
-            grad_bias = reduce(grad_output, "b c h w -> c", "sum")
-        return grad_input, grad_k1, grad_k2, grad_bias, None, None, None, None
-
-
-depthwise_remat_conv = DepthwiseRematConvFn.apply
-
-
 def conv_layer(
     c_in: int,
     c_out: int,
@@ -127,141 +67,85 @@ def conv_layer(
         return nn.Conv2d(c_in, c_out, k, bias=bias, padding="same")
 
 
-class ConvFFT(nn.Module):
+class FFBlock(nn.Module):
     def __init__(
         self,
         dim: int,
-        mult: int = 4,
-        use_depthwise: bool = True,
-        pos_features: int = 16,
-        norm_fn: NormFnType = LayerNorm,
-        depthwise_act: activation_type = default_activation,
+        d_out: int,
+        norm_fn: NormFnType,
+        ff_mult: int = 1,
+        act: Callable[[], nn.Module] = nn.GELU,
     ):
         super().__init__()
-        hidden_dim = int(dim * mult)
-        conv = partial(
-            conv_layer,
-            use_depthwise=use_depthwise,
-            depthwise_act=depthwise_act,
-        )
-        self.in_norm = norm_fn(dim)
-        self.map_in = conv(dim, hidden_dim)
-        self.pos_emb = FourierPosEmb(pos_features)
-        self.fft_map = conv(
-            hidden_dim * 2 + pos_features,
-            hidden_dim * 2,
-            use_depthwise=use_depthwise,
-        )
-        self.map_out = conv(hidden_dim, dim)
-        self.out_norm = norm_fn(dim, init_weight=1e-3)
+        d_hidden = int(dim * ff_mult)
+        self.conv_in = conv_layer(dim, d_hidden)
+        self.act_1 = act()
+        self.norm_mid = norm_fn(d_hidden)
+        self.act_2 = act()
+        self.conv_out = conv_layer(d_hidden, d_out)
+        self.act_3 = act()
 
     def forward(self, x, **kwargs):
-        y = self.map_in(self.in_norm(x))
-        yf = torch.fft.rfft2(y, norm="ortho")
-        ym, ya = yf.abs(), yf.angle()
-        pe = self.pos_emb(ym)
-        yf = self.fft_map(torch.cat([ym, ya, pe], dim=1))
-        yf = torch.polar(*yf.chunk(2, dim=1))
-        y = torch.fft.irfft2(yf, norm="ortho")
-        y = self.map_out(y)
-        return x + self.out_norm(y, **kwargs)
+        y = self.conv_in(x)
+        y = self.act_1(y)
+        y = self.norm_mid(y, **kwargs)
+        y = self.act_2(y)
+        y = self.conv_out(y)
+        y = self.act_3(y)
+        return y
 
 
-class FF(nn.Module):
+class Layer(SandwichNorm):
     def __init__(
         self,
         dim: int,
-        mult: int = 4,
-        norm_fn: NormFnType = LayerNorm,
-        depthwise_act: activation_type = default_activation,
-        act: activation_type = None,
-        use_depthwise: bool = False,
+        norm_fn: NormFnType,
+        scale_shift: bool = False,
+        init_weight: float = 1e-3,
+        ff_mult: int = 1,
     ):
-        super().__init__()
-        if act is None:
-            act = depthwise_act
-        conv = partial(
-            conv_layer, use_depthwise=use_depthwise, depthwise_act=depthwise_act
+        super().__init__(
+            dim,
+            FFBlock,
+            norm_fn,
+            scale_shift,
+            init_weight,
+            dict(ff_mult=ff_mult, norm_fn=norm_fn),
         )
-        inner = [
-            nn.BatchNorm2d(dim),
-            nn.ReLU(inplace=True),
-            conv(dim, dim * mult),
-            act(),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(dim * mult, dim, 3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(dim),
-        ]
-        with torch.no_grad():
-            inner[-1].weight.fill_(1e-1)
-        self.inner = nn.Sequential(*inner)
+
+
+class Downsample2d(nn.Module):
+    def __init__(self, c_in, c_out):
+        super().__init__()
+        dkern = torch.tensor([1, 2, 1]) / 4
+        dkern = dkern[:, None] @ dkern[None, :]
+        cmat = compute_channel_change_mat(c_out / c_in)
+        weight = torch.einsum("hw,oi->oihw", dkern, cmat)
+        self.register_buffer("weight", weight)
 
     def forward(self, x):
-        return x + self.inner(x)
+        n, c, h, w = x.shape
+        o, i, _, _ = self.weight.shape
+        groups = c // i
+        x = rearrange(x, "b (g c) h w -> (b g) c h w", g=groups)
+        x = F.conv2d(x, self.weight, padding=1, stride=2)
+        x = rearrange(x, "(b g) c h w -> b (g c) h w", g=groups)
+        return x
 
 
-class FeedForward(nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        mult: int = 4,
-        norm_fn: NormFnType = LayerNorm,
-        depthwise_act: activation_type = default_activation,
-        act: activation_type = None,
-        use_depthwise: bool = True,
-    ):
+class Upsample2d(nn.Module):
+    def __init__(self, c_in, c_out):
+        # todo: figure out how to do this w/a fused kernel
         super().__init__()
-        hidden_dim = int(dim * mult)
-        if act is None:
-            act = depthwise_act
+        cmat = compute_channel_change_mat(c_out / c_in)
+        self.register_buffer("weight", cmat[:, :, None, None])
+        self.upsampler = nn.UpsamplingBilinear2d(scale_factor=2)
 
-        conv = partial(
-            conv_layer,
-            use_depthwise=use_depthwise,
-            depthwise_act=depthwise_act,
-        )
-
-        self.map_in = conv(dim, hidden_dim)
-        self.map_out = nn.Sequential(
-            conv(hidden_dim, hidden_dim),
-            act(),
-            conv(hidden_dim, dim, bias=False),
-        )
-        self.out_norm = norm_fn(dim, init_weight=1e-3)
-
-    def forward(self, x, **kwargs):
-        y = self.map_in(x)
-        y = self.map_out(y)
-        y = self.out_norm(y, **kwargs)
-        return y + x
-
-
-def downsampler(
-    c_in: int,
-    c_out: int,
-    factor: int = 2,
-    norm_fn: NormFnType = LayerNorm,
-):
-    to_out = DropKwargs(
-        nn.Sequential(
-            nn.Conv2d(c_in, c_out // factor ** 2, 3, padding=1),
-            nn.PixelUnshuffle(factor),
-        )
-    )
-    return pre_norm(c_in, to_out, norm_fn=norm_fn)
-
-
-def upsampler(
-    c_in: int,
-    c_out: int,
-    factor: int = 2,
-    norm_fn: NormFnType = LayerNorm,
-):
-    to_out = DropKwargs(
-        nn.Sequential(
-            nn.Conv2d(c_in, c_out * factor ** 2, 3, padding=1),
-            nn.PixelShuffle(factor),
-        )
-    )
-    return pre_norm(c_in, to_out, norm_fn=norm_fn)
+    def forward(self, x):
+        n, c, h, w = x.shape
+        o, i, _, _ = self.weight.shape
+        groups = c // i
+        x = rearrange(x, "b (g c) h w -> (b g) c h w", g=groups)
+        x = F.conv2d(x, self.weight)
+        x = rearrange(x, "(b g) c h w -> b (g c) h w", g=groups)
+        return self.upsampler(x)

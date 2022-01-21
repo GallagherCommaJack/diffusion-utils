@@ -1,8 +1,14 @@
 from abc import abstractmethod
-from typing import Any, Callable, Dict, Type
+from functools import partial
+from typing import Any, Callable, Dict, Tuple, Type
 import torch
 from utils import factor_int
 from torch import nn
+import math
+from einops.layers.torch import Rearrange
+
+from .utils import clamp_exp
+from .attn import ScaledCosineAttention
 
 
 class ModelBuilder:
@@ -28,7 +34,7 @@ class ModelBuilder:
         self.hparams.update(kwargs)
         return self.build_inner()
 
-    def sub_builder(self, builder_class: Type[ModelBuilder], **kwargs) -> ModelBuilder:
+    def sub_builder(self, builder_class, **kwargs):
         hparams = self.hparams | kwargs
         return builder_class(**hparams)
 
@@ -92,5 +98,45 @@ class DepthwiseConvLayer(HasConvLayer):
         return nn.Sequential(c1, c2)
 
 
-# class MoEConvLayer(HasConvLayer):
-#     def conv_layer(self, c_in: int, c_out: int, k: int = 1, stride: int = 1, padding="same",  bias: bool = True, **kwargs):
+class HasChannelNorm(ModelBuilder):
+    def channel_norm(self, dim: int, affine: bool = True):
+        return nn.BatchNorm2d(dim, affine=affine)
+
+
+class HasGroupNorm(ModelBuilder):
+    def group_norm(self, dim: int, groups: int, affine: bool = True):
+        return nn.GroupNorm(groups, dim, affine=affine)
+
+
+class HasFeedForward(HasConvLayer, HasChannelNorm):
+    def ff_act():
+        return nn.ReLU(inplace=True)
+
+    def feedforward(self, dim: int) -> nn.Module:
+        mult = self.get_param("ff_mult", lambda: 4)
+        res_weight = self.get_param("res_weight", lambda: 1e-1)
+        layers = [
+            self.channel_norm(dim),
+            self.ff_act(),
+            self.conv_layer(dim, dim * mult, 3),
+            self.ff_act(),
+            self.conv_layer(dim * mult, dim, 3),
+            self.ff_act(),
+            self.channel_norm(dim),
+        ]
+        with torch.no_grad():
+            layers[-1].weight.fill_(res_weight)
+        return nn.Sequential(*layers)
+
+
+class DownsamplingStage(nn.Module):
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        pass
+
+
+class UpsamplingStage(nn.Module):
+    def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        pass
+
+
+# class HasDownsamplingStage(HasConvLayer):

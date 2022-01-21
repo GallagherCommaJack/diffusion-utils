@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch import Tensor
 from torch.types import Number
+from einops import repeat
 
 T = TypeVar("T")
 
@@ -216,11 +217,27 @@ def calc_v_with_distillation_errors(net, z, t_in, t_out, *args, **kwargs):
     e = v.sub(targets).pow(2).mean(dim=[1, 2, 3])
     return v, e
 
+
 def factor_int(n):
     val = math.ceil(math.sqrt(n))
-    val2 = int(n/val)
+    val2 = int(n / val)
     while val2 * val != float(n):
         val -= 1
-        val2 = int(n/val)
+        val2 = int(n / val)
     return val, val2
 
+
+def compute_channel_change_mat(io_ratio):
+    base = torch.eye(1)
+    if io_ratio < 1:
+        # reduce channels
+        c_in = int(1 / io_ratio)
+        cmat = repeat(base * io_ratio, "i1 i2 -> i1 (i2 m)", m=c_in)
+    else:
+        c_out = int(io_ratio)
+        cmat = repeat(base, "i1 i2 -> (i1 m) i2", m=c_out)
+    return cmat
+
+
+def max_neg_value(tensor):
+    return -torch.finfo(tensor.dtype).max
